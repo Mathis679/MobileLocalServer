@@ -10,19 +10,27 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Log
 import androidx.core.app.ActivityCompat
+import com.mathislaurent.mobilelocalserver.LocalServer
+import com.mathislaurent.mobilelocalserver.utils.toByteArray
 import java.io.IOException
+import java.io.Serializable
 import java.util.UUID
 
 const val NAME = "MOBILE_LOCAL_SERVER"
 
-class BluetoothServer(private val context: Context) {
+class BluetoothServer(private val context: Context, private val events: BluetoothServerEvents): LocalServer {
 
     private val bluetoothManager: BluetoothManager = context.getSystemService(BluetoothManager::class.java)
     private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
+    private val sockets: ArrayList<BluetoothSocket> = ArrayList()
 
-    fun create() {
+    override fun create() {
         checkConfig()
+        addNewSocket()
+    }
 
+    fun addNewSocket() {
+        AcceptThread().start()
     }
 
     private fun checkConfig() {
@@ -46,11 +54,25 @@ class BluetoothServer(private val context: Context) {
         }
     }
 
+    override fun dispatch(data: Serializable) {
+        sockets.forEach {
+            it.outputStream.write(data.toByteArray())
+        }
+    }
+
+    override fun disposed() {
+        TODO("Not yet implemented")
+    }
+
+
+
     @SuppressLint("MissingPermission")
     private inner class AcceptThread : Thread() {
 
-        private val mmServerSocket: BluetoothServerSocket? by lazy(LazyThreadSafetyMode.NONE) {
-            bluetoothAdapter?.listenUsingInsecureRfcommWithServiceRecord(NAME, UUID.randomUUID())
+        private val mServerSocket: BluetoothServerSocket? by lazy(LazyThreadSafetyMode.NONE) {
+            val uuid = generateNewUUID()
+            events.onNewSocketOpenedListening(uuid)
+            bluetoothAdapter?.listenUsingInsecureRfcommWithServiceRecord(NAME, uuid)
         }
 
         override fun run() {
@@ -58,28 +80,29 @@ class BluetoothServer(private val context: Context) {
             var shouldLoop = true
             while (shouldLoop) {
                 val socket: BluetoothSocket? = try {
-                    mmServerSocket?.accept()
+                    mServerSocket?.accept()
                 } catch (e: IOException) {
                     Log.e(BluetoothServer::class.java.name, "Socket's accept() method failed", e)
                     shouldLoop = false
                     null
                 }
                 socket?.also {
-                    // TODO handle
-                    mmServerSocket?.close()
+                    events.onNewClient()
+                    sockets.add(it)
                     shouldLoop = false
                 }
             }
         }
-
-        // Closes the connect socket and causes the thread to finish.
-        fun cancel() {
-            try {
-                mmServerSocket?.close()
-            } catch (e: IOException) {
-                Log.e(BluetoothServer::class.java.name, "Could not close the connect socket", e)
-            }
-        }
     }
 
+    private fun generateNewUUID(): UUID {
+        return UUID.randomUUID()
+    }
+
+}
+
+interface BluetoothServerEvents {
+    fun onNewClient()
+
+    fun onNewSocketOpenedListening(uuid: UUID)
 }
